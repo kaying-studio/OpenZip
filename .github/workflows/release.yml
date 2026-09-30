@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${V}"
+
+  build-linux:
+    name: Linux x64
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build linux --release
+      - name: Package
+        run: |
+          mkdir -p dist
+          cd build/linux/x64/release/bundle
+          tar -czf ../../../../../dist/OpenZip-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/*.tar.gz
+
+  build-windows:
+    name: Windows x64
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build windows --release
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" `
+            -DestinationPath "dist\OpenZip-${{ needs.prepare.outputs.version }}-windows-x64.zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*.zip
+
+  build-macos:
+    name: macOS
+    needs: prepare
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build macos --release
+      - name: Package
+        run: |
+          mkdir -p dist
+          APP_PATH=$(find build/macos -name "*.app" -type d | head -n 1)
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" \
+            "dist/OpenZip-${{ needs.prepare.outputs.version }}-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/*.zip
+
+  build-web:
+    name: Web
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build web --release
+      - name: Package
+        run: |
+          mkdir -p dist
+          cd build/web
+          tar -czf ../../dist/OpenZip-${{ needs.prepare.outputs.version }}-web.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: dist/*.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    needs: [prepare, build-linux, build-windows, build-macos, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: OpenZip ${{ needs.prepare.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          generate_release_notes: true
+          files: artifacts/*
+          body: |
+            ## OpenZip ${{ needs.prepare.outputs.version }}
+
+            ### 产物 / Artifacts
+            | 平台 | 文件 |
+            |------|------|
+            | Windows x64 | `OpenZip-*-windows-x64.zip` |
+            | macOS | `OpenZip-*-macos-universal.zip` |
+            | Linux x64 | `OpenZip-*-linux-x64.tar.gz` |
+            | Web | `OpenZip-*-web.tar.gz` |
+
+            ### 安装说明
+            - **Windows**：解压 zip 后运行 `OpenZip.exe`
+            - **macOS**：解压后拖入「应用程序」；首次打开如被拦截，请在「系统设置 → 隐私与安全性」中允许
+            - **Linux**：解压 tar.gz 后运行 `openzip`
+            - **Web**：解压后部署到任意静态服务器
+
+            ---
+
+            [中文文档](https://github.com/kayingai/OpenZip/blob/main/README.md) · [English](https://github.com/kayingai/OpenZip/blob/main/README.en.md)

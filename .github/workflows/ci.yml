@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+  build-linux:
+    name: Build Linux
+    needs: analyze-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build linux --release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cd build/linux/x64/release/bundle
+          tar -czf ../../../../../dist/OpenZip-linux-x64.tar.gz .
+          cd ../../../../../
+          ls -lh dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZip-linux-x64
+          path: dist/OpenZip-linux-x64.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows
+    needs: analyze-and-test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build windows --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" `
+            -DestinationPath "dist\OpenZip-windows-x64.zip" -Force
+          Get-ChildItem dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZip-windows-x64
+          path: dist/OpenZip-windows-x64.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS
+    needs: analyze-and-test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build macos --release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          APP_PATH=$(find build/macos -name "*.app" -type d | head -n 1)
+          echo "Packaging $APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" \
+            "dist/OpenZip-macos-universal.zip"
+          ls -lh dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZip-macos-universal
+          path: dist/OpenZip-macos-universal.zip
+          if-no-files-found: error
+
+  build-web:
+    name: Build Web
+    needs: analyze-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build web --release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cd build/web
+          tar -czf ../../dist/OpenZip-web.tar.gz .
+          cd ../..
+          ls -lh dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZip-web
+          path: dist/OpenZip-web.tar.gz
+          if-no-files-found: error
